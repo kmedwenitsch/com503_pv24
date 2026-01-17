@@ -37,8 +37,9 @@ class DailyPipeline:
         self.entsoe = entsoe
 
     def run(self, run_date: date) -> DailyOutput:
-        yday = previous_day(run_date)
-        day_key = DayKey.from_date(yday)  # ignore year by design
+        # run_date is used ONLY to choose which PV day (month/day) from CSV we want.
+        pv_ref_day = previous_day(run_date)
+        day_key = DayKey.from_date(pv_ref_day)  # ignore year by design
 
         pv_hist = load_pv_history_for_day(
             csv_path=self.pv_csv_path,
@@ -52,17 +53,55 @@ class DailyPipeline:
         # Split weather into yesterday and today (based on run_date/yday in local tz)
         swr = weather["shortwave_radiation"].astype(float)
 
-        swr_yday = swr[(swr.index.date == yday)]
-        swr_today = swr[(swr.index.date == run_date)]
+        # Weather data is always "yesterday + today" relative to NOW (Open-Meteo past_days/forecast_days).
+        available_dates = sorted(set(swr.index.date))
+        if len(available_dates) < 2:
+            raise ValueError("Open-Meteo did not return enough hourly weather data (need yesterday+today).")
 
-        # Align indexes for fitting: use intersection of timestamps
+        weather_yday = available_dates[-2]
+        weather_today = available_dates[-1]
+
+        swr_yday = swr[swr.index.date == weather_yday]
+        swr_today = swr[swr.index.date == weather_today]
+
+        # --- Align by hour-of-day (year agnostic) ---
         pv_yday = pv_hist.hourly_kw
-        common_idx = pv_yday.index.intersection(swr_yday.index)
-        pv_yday_aligned = pv_yday.reindex(common_idx).fillna(0.0)
-        swr_yday_aligned = swr_yday.reindex(common_idx).fillna(0.0)
+        swr_yday = swr_yday
+        swr_today = swr_today
 
-        a = fit_scale_from_yesterday(pv_yday_aligned, swr_yday_aligned)
-        fc = forecast_today(self.pv_capacity_kw, a, swr_today)
+        # Create hour-of-day series (0..23)
+        pv_by_hour = pv_yday.groupby(pv_yday.index.hour).mean()
+        swr_yday_by_hour = swr_yday.groupby(swr_yday.index.hour).mean()
+        swr_today_by_hour = swr_today.groupby(swr_today.index.hour).mean()
+
+        # Ensure we have data for fitting
+        common_hours = pv_by_hour.index.intersection(swr_yday_by_hour.index)
+        if len(common_hours) == 0:
+            raise ValueError(
+                "No overlapping hours between PV history and yesterday weather. "
+                "This usually means the date selection or timezone is off."
+            )
+
+        pv_fit = pv_by_hour.reindex(common_hours).fillna(0.0)
+        swr_fit = swr_yday_by_hour.reindex(common_hours).fillna(0.0)
+
+        a = fit_scale_from_yesterday(pv_fit, swr_fit)
+
+        # Forecast today using today's hourly timestamps (keep real datetime index!)
+        # We map hour->value onto the actual timestamps from swr_today
+        pv_forecast_by_hour = (a * swr_today_by_hour).clip(lower=0.0, upper=float(self.pv_capacity_kw)).fillna(0.0)
+
+        pv_forecast_series = swr_today.copy()
+        pv_forecast_series[:] = [float(pv_forecast_by_hour.get(t.hour, 0.0)) for t in pv_forecast_series.index]
+
+        # Wrap into ForecastResult-like structure
+        class _Tmp:
+            def __init__(self, s): self.hourly_pv_kw = s
+
+        fc = _Tmp(pv_forecast_series)
+
+
+        # fc = forecast_today(self.pv_capacity_kw, a, swr_today)
 
         prices = self.entsoe.fetch_day_ahead_prices(run_date)
         price_map = prices.prices if prices else {}
@@ -85,11 +124,11 @@ class DailyPipeline:
             )
 
         output = DailyOutput(
-            run_date=run_date.isoformat(),
-            pv_history_day=yday.isoformat(),
+            run_date=weather_today.isoformat(),  # actual weather 'today'
+            pv_history_day=pv_ref_day.isoformat(),  # the PV day you selected
             note="Year in PV CSV is ignored. Matching is done by month/day only. Model is a simple scale fit from yesterday.",
             points=points,
         )
 
-        self.output_repo.save(run_date, output)
+        self.output_repo.save(weather_today, output)
         return output

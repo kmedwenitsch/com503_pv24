@@ -48,9 +48,9 @@ def load_pv_history_for_day(csv_path: str, value_col: str, day_key: DayKey) -> P
     day_df = day_df.sort_values("ts").set_index("ts")
 
     # assume val is power (kW) in 15-min. We'll resample to hourly mean kW.
-    hourly = day_df["val"].resample("1H").mean()
+    hourly = day_df["val"].resample("1h").mean()
 
     # fill missing hours (if any) with 0
-    hourly = hourly.asfreq("1H", fill_value=0.0)
+    hourly = hourly.asfreq("1h", fill_value=0.0)
 
     return PVHistory(day_key=day_key, hourly_kw=hourly)
