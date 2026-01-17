@@ -7,7 +7,7 @@ Ebenfalls soll zukünftig der aktuelle Strommarktpreis (über ENTSO-E  Webservic
 
 Die verwendeten Inputdaten im Prototyp stammen beispielhaft von einer PV-Anlage in Neudörfl (Burgenland).
 
-Das Projekt wurde im Rahmen der Lehrveranstaltung COM503 – Verteilte Systeme umgesetzt.
+Das Projekt wurde im Rahmen der Lehrveranstaltung COM503 – Verteilte Systeme umgesetzt unnd ist auf [GitHub](https://github.com/kmedwenitsch/com503_pv24) veröffentlicht.
 
 ## Projektteam
 
